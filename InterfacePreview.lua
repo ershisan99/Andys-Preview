@@ -22,6 +22,22 @@ function G.FUNCS.calculate_score_button()
    FN.PRE.start_new_coroutine()
 end
 
+-- Keybind: press "s" to calculate the score (same as clicking the button).
+FN.PRE.calculate_key = "s"
+local orig_key_press = Controller.key_press_update
+function Controller:key_press_update(key, dt)
+   orig_key_press(self, key, dt)
+   if key ~= FN.PRE.calculate_key then return end
+   if self.locks.frame or self.text_input_hook then return end
+   if G.SETTINGS.paused or G.OVERLAY_MENU then return end
+   if not FN.PRE.enabled() then return end
+   if not (G.STATE == G.STATES.SELECTING_HAND or
+           G.STATE == G.STATES.DRAW_TO_HAND or
+           G.STATE == G.STATES.PLAY_TAROT)
+   then return end
+   G.FUNCS.calculate_score_button()
+end
+
 function FN.PRE.get_preview_container()
    return {n=G.UIT.R, config={id = "fn_preview_container", align = "cm"}, nodes={
       {n=G.UIT.C, config={align = "cm"}, nodes={

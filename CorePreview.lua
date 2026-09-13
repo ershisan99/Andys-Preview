@@ -41,6 +41,9 @@ end
 -- SIMULATION UPDATE ADVICE:
 --
 
+-- The simulation only runs when the "Calculate Score" button is clicked.
+-- Game-state hooks below merely mark the current preview as stale (hide it),
+-- so no simulation work happens on selection, reordering, discards, etc.
 function FN.PRE.add_update_event(trigger)
    function sim_func()
       FN.PRE.data = FN.PRE.simulate()
@@ -51,33 +54,36 @@ function FN.PRE.add_update_event(trigger)
    end
 end
 
--- Update simulation after a consumable (eg. Tarot, Planet) is used:
-local orig_use = Card.use_consumeable
-function Card:use_consumeable(area, copier)
-   orig_use(self, area, copier)
-   FN.PRE.add_update_event("immediate")
-end
-
--- Update simulation after card selection changed:
-local orig_hl = CardArea.parse_highlighted
-function CardArea:parse_highlighted()
-   orig_hl(self)
+function FN.PRE.invalidate()
    if not FN.PRE.lock_updates and FN.PRE.show_preview then
       FN.PRE.show_preview = false
    end
-   FN.PRE.add_update_event("immediate")
 end
 
--- Update simulation after joker sold:
+-- Hide preview after a consumable (eg. Tarot, Planet) is used:
+local orig_use = Card.use_consumeable
+function Card:use_consumeable(area, copier)
+   orig_use(self, area, copier)
+   FN.PRE.invalidate()
+end
+
+-- Hide preview after card selection changed:
+local orig_hl = CardArea.parse_highlighted
+function CardArea:parse_highlighted()
+   orig_hl(self)
+   FN.PRE.invalidate()
+end
+
+-- Hide preview after joker sold:
 local orig_card_remove = Card.remove_from_area
 function Card:remove_from_area()
    orig_card_remove(self)
    if self.config.type == 'joker' then
-      FN.PRE.add_update_event("immediate")
+      FN.PRE.invalidate()
    end
 end
 
--- Update simulation after joker reordering:
+-- Hide preview after joker reordering:
 local orig_update = CardArea.update
 function CardArea:update(dt)
    orig_update(self, dt)
@@ -126,10 +132,7 @@ function FN.PRE.update_on_card_order_change(cardarea)
       elseif cardarea.config.type == 'hand' then
          FN.PRE.hand_order = prev_order
       end
-      if FN.PRE.show_preview and not FN.PRE.lock_updates then
-         FN.PRE.show_preview = false
-      end
-      FN.PRE.add_update_event("immediate")
+      FN.PRE.invalidate()
    end
 end
 
@@ -153,13 +156,15 @@ function G.FUNCS.evaluate_play(e)
    FN.PRE.add_reset_event("after")
 end
 
-local orig_discard = G.FUNCS.discard_cards_from_highlighted
-function G.FUNCS.discard_cards_from_highlighted(e, is_hook_blind)
-   orig_discard(e, is_hook_blind)
-   if not is_hook_blind then
-      FN.PRE.add_reset_event("immediate")
-   end
-end
+-- Disabled: queueing a reset event on every discard caused noticeable lag.
+-- The selection/order-change hooks above already refresh the preview after a discard.
+-- local orig_discard = G.FUNCS.discard_cards_from_highlighted
+-- function G.FUNCS.discard_cards_from_highlighted(e, is_hook_blind)
+--    orig_discard(e, is_hook_blind)
+--    if not is_hook_blind then
+--       FN.PRE.add_reset_event("immediate")
+--    end
+-- end
 
 --
 -- USER INTERFACE ADVICE:
