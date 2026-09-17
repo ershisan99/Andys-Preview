@@ -322,6 +322,12 @@ FNSJ.simulate_faceless = function(joker_obj, context)
    -- Effect not relevant (Discard)
 end
 FNSJ.simulate_green_joker = function(joker_obj, context)
+   if context.cardarea == G.hand and context.discard and not context.blueprint then
+      -- This is only necessary for 'The Hook' blind. Applies once per discard, not once per card:
+      if context.other_card == context.full_hand[#context.full_hand] then
+         joker_obj.ability.mult = math.max(0, joker_obj.ability.mult - joker_obj.ability.extra.discard_sub)
+      end
+   end
    if context.cardarea == G.jokers and context.before and not context.blueprint then
       joker_obj.ability.mult = joker_obj.ability.mult + joker_obj.ability.extra.hand_add
    end
@@ -478,8 +484,9 @@ FNSJ.simulate_reserved_parking = function(joker_obj, context)
    end
 end
 FNSJ.simulate_mail = function(joker_obj, context)
+   -- This is only necessary for 'The Hook' blind.
    if context.cardarea == G.hand and context.discard then
-      if context.other_card.id == G.GAME.current_round.mail_card.id and not context.other_card.debuff then
+      if FN.SIM.is_rank(context.other_card, G.GAME.current_round.mail_card.id) and not context.other_card.debuff then
          FN.SIM.add_dollars(joker_obj.ability.extra)
       end
    end
@@ -558,7 +565,12 @@ FNSJ.simulate_diet_cola = function(joker_obj, context)
    -- Effect not relevant (Meta)
 end
 FNSJ.simulate_trading = function(joker_obj, context)
-   -- Effect not relevant (Discard)
+   -- This is only necessary for 'The Hook' blind, when it discards the only held card.
+   if context.cardarea == G.hand and context.discard and not context.blueprint then
+      if G.GAME.current_round.discards_used <= 0 and #context.full_hand == 1 then
+         FN.SIM.add_dollars(joker_obj.ability.extra)
+      end
+   end
 end
 FNSJ.simulate_flash = function(joker_obj, context)
    if context.cardarea == G.jokers and context.global then
@@ -841,15 +853,16 @@ FNSJ.simulate_seeing_double = function(joker_obj, context)
    end
 end
 FNSJ.simulate_matador = function(joker_obj, context)
-   if context.cardarea == G.jokers and context.debuffed_hand then
-      if G.GAME.blind.triggered then
+   -- Pays out whether the hand was debuffed or scored, as long as the boss blind's ability triggered.
+   if context.cardarea == G.jokers and (context.debuffed_hand or context.global) then
+      if FN.SIM.misc.blind_triggered then
          FN.SIM.add_dollars(joker_obj.ability.extra)
       end
    end
 end
 FNSJ.simulate_hit_the_road = function(joker_obj, context)
    if context.cardarea == G.hand and context.discard and not context.blueprint then
-      if context.other_card.id == 11 and not context.other_card.debuff then
+      if FN.SIM.is_rank(context.other_card, 11) and not context.other_card.debuff then
          joker_obj.ability.x_mult = joker_obj.ability.x_mult + joker_obj.ability.extra
       end
    end

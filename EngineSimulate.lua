@@ -3,7 +3,19 @@
 -- The heart of this library: it replicates the game's score evaluation.
 
 if not FN.SIM.run then
+   -- Returns the simulated results, or nil if the simulation failed for whatever reason.
+   -- An error in here can never reach (and crash) the game, and never leaves game state modified.
    function FN.SIM.run()
+      local ok, results = FN.safe_call("simulation", FN.SIM.run_unprotected)
+      if ok and results then return results end
+
+      if FN.SIM.orig.is_saved then
+         FN.safe_call("simulation state restore", FN.SIM.manage_state, "RESTORE")
+      end
+      return nil
+   end
+
+   function FN.SIM.run_unprotected()
       local null_ret = {score = {min=0, exact=0, max=0}, dollars = {min=0, exact=0, max=0}}
       if #G.hand.highlighted < 1 then return null_ret end
 
@@ -12,15 +24,11 @@ if not FN.SIM.run then
       FN.SIM.manage_state("SAVE")
       FN.SIM.update_state_variables()
 
-      if not FN.SIM.simulate_blind_debuffs() then
-         FN.SIM.simulate_joker_before_effects()
-         FN.SIM.add_base_chips_and_mult()
-         FN.SIM.simulate_blind_effects()
-         FN.SIM.simulate_scoring_cards()
-         FN.SIM.simulate_held_cards()
-         FN.SIM.simulate_joker_global_effects()
-         FN.SIM.simulate_consumable_effects()
-         FN.SIM.simulate_deck_effects()
+      if FN.SIM.is_hook_active() then
+         -- The Hook discards random held cards before scoring, so every possible discard is simulated:
+         FN.SIM.simulate_hook()
+      elseif not FN.SIM.simulate_blind_debuffs() then
+         FN.SIM.simulate_hand()
       else -- Only Matador at this point:
          FN.SIM.simulate_all_jokers(G.jokers, {debuffed_hand = true})
       end
@@ -30,18 +38,36 @@ if not FN.SIM.run then
       return FN.SIM.get_results()
    end
 
-   function FN.SIM.init()
-      -- Reset:
+   -- Mirrors the scoring branch of G.FUNCS.evaluate_play(..)
+   function FN.SIM.simulate_hand()
+      FN.SIM.simulate_joker_before_effects()
+      FN.SIM.add_base_chips_and_mult()
+      FN.SIM.simulate_blind_effects()
+      FN.SIM.simulate_scoring_cards()
+      FN.SIM.simulate_held_cards()
+      FN.SIM.simulate_joker_global_effects()
+      FN.SIM.simulate_consumable_effects()
+      FN.SIM.simulate_deck_effects()
+   end
+
+   function FN.SIM.reset_running()
       FN.SIM.running = {
          min   = {chips = 0, mult = 0, dollars = 0},
          exact = {chips = 0, mult = 0, dollars = 0},
          max   = {chips = 0, mult = 0, dollars = 0},
          reps = 0
       }
+   end
+
+   function FN.SIM.init()
+      -- Reset:
+      FN.SIM.reset_running()
+      FN.SIM.misc.blind_triggered = false
 
       -- Fetch metadata about simulated play:
       local hand_name, _, poker_hands, scoring_hand, _ = G.FUNCS.get_poker_hand_info(G.hand.highlighted)
       FN.SIM.env.scoring_name = hand_name
+      FN.SIM.env.poker_hands = poker_hands
 
       -- Identify played cards and extract necessary data:
       FN.SIM.env.played_cards = {}
@@ -156,12 +182,16 @@ if not FN.SIM.run then
       if save_or_restore == "SAVE" then
          FNSO.random_data = copy_table(G.GAME.pseudorandom)
          FNSO.hand_data = copy_table(G.GAME.hands)
+         FNSO.blind_triggered = G.GAME.blind.triggered
+         FNSO.is_saved = true
          return
       end
 
       if save_or_restore == "RESTORE" then
+         FNSO.is_saved = false
          G.GAME.pseudorandom = FNSO.random_data
          G.GAME.hands = FNSO.hand_data
+         G.GAME.blind.triggered = FNSO.blind_triggered
          return
       end
    end
@@ -179,6 +209,8 @@ if not FN.SIM.run then
 
    function FN.SIM.simulate_scoring_cards()
       for _, scoring_card in ipairs(FN.SIM.env.scoring_cards) do
+         -- As in evaluate_play(..), a debuffed scoring card counts as the blind being triggered (Matador):
+         if scoring_card.debuff then FN.SIM.misc.blind_triggered = true end
          FN.SIM.simulate_card_in_context(scoring_card, G.play)
       end
    end
@@ -233,6 +265,7 @@ if not FN.SIM.run then
       if G.GAME.blind.disabled then return end
 
       if G.GAME.blind.name == "The Flint" then
+         FN.SIM.misc.blind_triggered = true -- See Blind:modify_hand(..); relevant for Matador
          local function flint(data)
             local half_chips = math.floor(data.chips/2 + 0.5)
             local half_mult = math.floor(data.mult/2 + 0.5)
@@ -266,102 +299,28 @@ if not FN.SIM.run then
    end
 
    function FN.SIM.simulate_blind_debuffs()
+      -- NOTE: `FN.SIM.misc.blind_triggered` mirrors `G.GAME.blind.triggered`, which decides whether
+      --       Matador pays out. It is tracked separately so the real blind is never modified.
+      FN.SIM.misc.blind_triggered = false
+
       local blind_obj = G.GAME.blind
       if blind_obj.disabled then return false end
 
       -- The following are part of Blind:press_play()
-
-      if blind_obj.name == "The Hook" then
-         blind_obj.triggered = true
-
-   local held = FN.SIM.env.held_cards
-   local n = #held
-   local combinations = {}
-
-   -- Generate all 0, 1, or 2 card discard combinations
-   for i = 0, math.min(2, n) do
-      if i == 0 then
-         table.insert(combinations, {})
-      elseif i == 1 then
-         for a = 1, n do
-            table.insert(combinations, {a})
-         end
-      elseif i == 2 then
-         for a = 1, n - 1 do
-            for b = a + 1, n do
-               table.insert(combinations, {a, b})
-            end
-         end
-      end
-   end
-
-   local min_score, max_score = math.huge, -math.huge
-   local min_dollars, max_dollars = math.huge, -math.huge
-
-   for _, discard_idxs in ipairs(combinations) do
-      -- Deep copy held cards
-      local held_copy = {}
-      for i, card in ipairs(held) do
-         held_copy[i] = copy_table(card)
-      end
-
-      -- Remove discard cards from held_copy
-      table.sort(discard_idxs, function(a, b) return a > b end)
-      for _, idx in ipairs(discard_idxs) do
-         table.remove(held_copy, idx)
-      end
-
-      -- Backup and replace held cards temporarily
-      local backup_held = FN.SIM.env.held_cards
-      FN.SIM.env.held_cards = held_copy
-
-      -- Reset sim state
-      FN.SIM.running.min = {chips = 0, mult = 0, dollars = 0}
-      FN.SIM.running.exact = {chips = 0, mult = 0, dollars = 0}
-      FN.SIM.running.max = {chips = 0, mult = 0, dollars = 0}
-
-      -- Simulate score
-      FN.SIM.simulate_joker_before_effects()
-      FN.SIM.add_base_chips_and_mult()
-      FN.SIM.simulate_blind_effects()
-      FN.SIM.simulate_scoring_cards()
-      FN.SIM.simulate_held_cards()
-      FN.SIM.simulate_joker_global_effects()
-      FN.SIM.simulate_consumable_effects()
-      FN.SIM.simulate_deck_effects()
-
-      -- Evaluate score
-      local res = FN.SIM.get_results()
-      min_score = math.min(min_score, res.score.min)
-      max_score = math.max(max_score, res.score.max)
-      min_dollars = math.min(min_dollars, res.dollars.min)
-      max_dollars = math.max(max_dollars, res.dollars.max)
-
-      -- Restore original held cards
-      FN.SIM.env.held_cards = backup_held
-   end
-
-   -- Overwrite final min/max range based on permutations
-   FN.SIM.running.min = {chips = min_score, mult = 1, dollars = min_dollars}
-   FN.SIM.running.max = {chips = max_score, mult = 1, dollars = max_dollars}
-
-   -- NOTE: FN.SIM.running.exact remains unset here; it's not relevant in this projection context
-   return true -- Prevent default simulation since we’ve replaced it entirely
-end
+      -- NOTE: The Hook is handled separately, see FN.SIM.simulate_hook()
+      -- NOTE: press_play() marks the blind as triggered, but Blind:debuff_hand(..) always resets
+      --       that flag before jokers are evaluated, so Matador does NOT pay out for these.
 
       if blind_obj.name == "The Tooth" then
-         blind_obj.triggered = true
          FN.SIM.add_dollars((-1) * #FN.SIM.env.played_cards)
       end
 
       -- The following are part of Blind:debuff_hand(..)
 
       if blind_obj.name == "The Arm" then
-         blind_obj.triggered = false
-
          local played_hand_name = FN.SIM.env.scoring_name
          if G.GAME.hands[played_hand_name].level > 1 then
-            blind_obj.triggered = true
+            FN.SIM.misc.blind_triggered = true
             -- NOTE: Important to save/restore G.GAME.hands here
             -- NOTE: Implementation mirrors level_up_hand(..)
             local played_hand_data = G.GAME.hands[played_hand_name]
@@ -373,16 +332,123 @@ end
       end
 
       if blind_obj.name == "The Ox" then
-         blind_obj.triggered = false
-
          if FN.SIM.env.scoring_name == G.GAME.current_round.most_played_poker_hand then
-            blind_obj.triggered = true
+            FN.SIM.misc.blind_triggered = true
+            -- Money is set to exactly $0 (which is a gain when in debt):
             FN.SIM.add_dollars(-G.GAME.dollars)
          end
          return false -- IMPORTANT: Avoid duplicate effects from Blind:debuff_hand() below
       end
 
-      return blind_obj:debuff_hand(G.hand.highlighted, FN.SIM.env.poker_hands, FN.SIM.env.scoring_name, true)
+      -- Blind:debuff_hand(..) sets the blind's triggered flag as a side effect, even when only checking.
+      -- NOTE: The real flag is put back by FN.SIM.manage_state("RESTORE")
+      local is_debuffed = blind_obj:debuff_hand(G.hand.highlighted, FN.SIM.env.poker_hands, FN.SIM.env.scoring_name, true)
+      FN.SIM.misc.blind_triggered = (blind_obj.triggered and true) or false
+
+      return is_debuffed
+   end
+
+   --
+   -- THE HOOK:
+   --
+
+   function FN.SIM.is_hook_active()
+      return G.GAME.blind.name == "The Hook" and not G.GAME.blind.disabled
+   end
+
+   -- The Hook discards 2 random held cards (or as many as are held) after the hand is played but
+   -- before it is scored; see Blind:press_play(). Which cards get discarded cannot be known, so
+   -- every possible discard is simulated and the overall minimum and maximum are reported.
+   function FN.SIM.simulate_hook()
+      local snapshot = FN.SIM.snapshot_env()
+      local num_held = #snapshot.held_cards
+      local num_discards = math.min(2, num_held)
+
+      local combinations = {}
+      if num_discards == 0 then
+         table.insert(combinations, {})
+      elseif num_discards == 1 then
+         table.insert(combinations, {1})
+      else
+         for a = 1, num_held - 1 do
+            for b = a + 1, num_held do
+               table.insert(combinations, {a, b})
+            end
+         end
+      end
+
+      local min_score, max_score = math.huge, -math.huge
+      local min_dollars, max_dollars = math.huge, -math.huge
+
+      for _, discard_idxs in ipairs(combinations) do
+         -- Jokers and cards get modified while simulating, so start every discard from a clean slate:
+         FN.SIM.restore_env(snapshot)
+         FN.SIM.reset_running()
+
+         -- Blind:press_play() marks The Hook as triggered, but Blind:debuff_hand(..) resets that flag
+         -- before any joker is evaluated, so Matador does NOT pay out because of The Hook itself:
+         FN.SIM.misc.blind_triggered = false
+
+         -- Split held cards into discarded and kept cards, both in hand order:
+         local is_discarded = {}
+         for _, idx in ipairs(discard_idxs) do is_discarded[idx] = true end
+         local kept_cards, discarded_cards = {}, {}
+         for i, card in ipairs(FN.SIM.env.held_cards) do
+            table.insert(is_discarded[i] and discarded_cards or kept_cards, card)
+         end
+         FN.SIM.env.held_cards = kept_cards
+
+         -- Joker effects on discard (eg. Mail-In Rebate); see G.FUNCS.discard_cards_from_highlighted(..)
+         for _, card in ipairs(discarded_cards) do
+            FN.SIM.simulate_all_jokers(G.hand, {discard = true, other_card = card, full_hand = discarded_cards})
+         end
+
+         FN.SIM.simulate_hand()
+
+         local res = FN.SIM.get_results()
+         min_score = math.min(min_score, res.score.min)
+         max_score = math.max(max_score, res.score.max)
+         min_dollars = math.min(min_dollars, res.dollars.min)
+         max_dollars = math.max(max_dollars, res.dollars.max)
+      end
+
+      -- Overwrite final min/max range based on all possible discards:
+      -- NOTE: FN.SIM.running.exact is left as the last simulated discard; an exact result cannot be known here
+      FN.SIM.running.min = {chips = min_score, mult = 1, dollars = min_dollars}
+      FN.SIM.running.max = {chips = max_score, mult = 1, dollars = max_dollars}
+   end
+
+   function FN.SIM.snapshot_env()
+      local env = FN.SIM.env
+
+      -- Scoring cards are the same objects as (some of) the played cards; remember which ones:
+      local scoring_idxs = {}
+      for _, scoring_card in ipairs(env.scoring_cards) do
+         for i, played_card in ipairs(env.played_cards) do
+            if played_card == scoring_card then
+               table.insert(scoring_idxs, i)
+               break
+            end
+         end
+      end
+
+      return {
+         jokers = copy_table(env.jokers),
+         played_cards = copy_table(env.played_cards),
+         held_cards = copy_table(env.held_cards),
+         scoring_idxs = scoring_idxs
+      }
+   end
+
+   function FN.SIM.restore_env(snapshot)
+      local env = FN.SIM.env
+      env.jokers = copy_table(snapshot.jokers)
+      env.played_cards = copy_table(snapshot.played_cards)
+      env.held_cards = copy_table(snapshot.held_cards)
+      env.scoring_cards = {}
+      for _, idx in ipairs(snapshot.scoring_idxs) do
+         table.insert(env.scoring_cards, env.played_cards[idx])
+      end
    end
 
    --

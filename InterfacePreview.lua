@@ -6,20 +6,33 @@
 local orig_hud = create_UIBox_HUD
 function create_UIBox_HUD()
    local contents = orig_hud()
-   
-   local hand_text_area = FN.PRE.find_hand_text_area(contents)
-   if not hand_text_area then return contents end
-   table.insert(hand_text_area.nodes[1].nodes, FN.PRE.get_preview_container())
-
-   --[[local dollars_node_wrap = {n=G.UIT.C, config={id = "fn_pre_dollars_wrap", align = "cm"}, nodes={}}
-   if G.SETTINGS.FN.preview_dollars then table.insert(dollars_node_wrap.nodes, FN.PRE.get_dollars_node()) end
-   table.insert(contents.nodes[1].nodes[1].nodes[5].nodes[2].nodes[3].nodes[1].nodes[1].nodes[1].nodes, dollars_node_wrap) --]]
-
+   -- If anything goes wrong, the game simply gets its regular HUD without the preview:
+   FN.safe_call("HUD setup", FN.PRE.add_preview_to_hud, contents)
    return contents
 end
 
+function FN.PRE.add_preview_to_hud(contents)
+   local hand_text_area = FN.PRE.find_hand_text_area(contents)
+   if not hand_text_area then return end
+   local rows = hand_text_area.nodes and hand_text_area.nodes[1] and hand_text_area.nodes[1].nodes
+   if type(rows) ~= "table" then return end
+
+   -- Build everything first, so that the HUD is only touched once nothing can fail anymore:
+   local preview_container = FN.PRE.get_preview_container()
+   table.insert(rows, preview_container)
+
+   -- The HUD already reaches the bottom edge of the screen, so the money row must not make it taller.
+   -- Make room by trimming the (mostly empty) row that shows the name of the selected poker hand:
+   if G.SETTINGS.FN.preview_dollars then
+      local hand_name_row = rows[1]
+      if type(hand_name_row) == "table" and type(hand_name_row.config) == "table" and type(hand_name_row.config.minh) == "number" then
+         hand_name_row.config.minh = math.max(0.6, hand_name_row.config.minh - FN.PRE.dollars_row_height)
+      end
+   end
+end
+
 function G.FUNCS.calculate_score_button()
-   FN.PRE.start_new_coroutine()
+   FN.safe_call("calculate score button", FN.PRE.start_new_coroutine)
 end
 
 -- Keybind: press "s" to calculate the score (same as clicking the button).
@@ -27,6 +40,10 @@ FN.PRE.calculate_key = "s"
 local orig_key_press = Controller.key_press_update
 function Controller:key_press_update(key, dt)
    orig_key_press(self, key, dt)
+   FN.safe_call("calculate score keybind", FN.PRE.on_key_press, self, key)
+end
+
+function FN.PRE.on_key_press(self, key)
    if key ~= FN.PRE.calculate_key then return end
    if self.locks.frame or self.text_input_hook then return end
    if G.SETTINGS.paused or G.OVERLAY_MENU then return end
@@ -39,11 +56,17 @@ function Controller:key_press_update(key, dt)
 end
 
 function FN.PRE.get_preview_container()
+   -- The money row sits between score and button. Its wrapper has no padding and the money text is
+   -- small, so the HUD only grows by the height of that one line of text.
+   local dollars_wrap = {n=G.UIT.R, config={id = "fn_pre_dollars_wrap", align = "cm"}, nodes={}}
+   if G.SETTINGS.FN.preview_dollars then table.insert(dollars_wrap.nodes, FN.PRE.get_dollars_node()) end
+
    return {n=G.UIT.R, config={id = "fn_preview_container", align = "cm"}, nodes={
       {n=G.UIT.C, config={align = "cm"}, nodes={
-         {n=G.UIT.R, config={id = "fn_pre_score_wrap", align = "cm", padding = 0.1}, nodes={
+         {n=G.UIT.R, config={id = "fn_pre_score_wrap", align = "cm", padding = G.SETTINGS.FN.preview_dollars and 0.05 or 0.1}, nodes={
             FN.PRE.get_score_node()
          }},
+         dollars_wrap,
          {n=G.UIT.R, config={id = "fn_calculate_score_button_wrap", align = "cm", padding = 0.1}, nodes={
             FN.PRE.get_calculate_score_button()
          }}
@@ -84,24 +107,18 @@ function FN.PRE.find_hand_text_area(node)
    return nil
 end
 
---[[function FN.PRE.get_dollars_node()
-   local top_color = FN.PRE.get_dollar_colour(0)
-   local bot_color = top_color
-   if FN.PRE.data ~= nil then
-      top_color = FN.PRE.get_dollar_colour(FN.PRE.data.dollars.max)
-      bot_color = FN.PRE.get_dollar_colour(FN.PRE.data.dollars.min)
-   else
-   end
-   return {n=G.UIT.C, config={id = "fn_pre_dollars", align = "cm"}, nodes={
-       {n=G.UIT.R, config={align = "cm"}, nodes={
-           {n=G.UIT.O, config={id = "fn_pre_dollars_top", func = "fn_pre_dollars_UI_set", object = DynaText({string = {{ref_table = FN.PRE.text.dollars, ref_value = "top"}}, colours = {top_color}, shadow = true, spacing = 2, bump = true, scale = 0.5})}}
-       }},
-       {n=G.UIT.R, config={minh = 0.05}, nodes={}},
-       {n=G.UIT.R, config={align = "cm"}, nodes={
-           {n=G.UIT.O, config={id = "fn_pre_dollars_bot", func = "fn_pre_dollars_UI_set", object = DynaText({string = {{ref_table = FN.PRE.text.dollars, ref_value = "bot"}}, colours = {bot_color}, shadow = true, spacing = 2, bump = true, scale = 0.5})}},
-       }}
+-- Net height that the money row adds to the HUD (its text, minus padding saved around the score):
+FN.PRE.dollars_row_height = 0.25
+
+function FN.PRE.get_dollars_node()
+   local text_scale = 0.4
+   local colour = FN.PRE.get_dollar_colour(0)
+
+   return {n = G.UIT.C, config = {id = "fn_pre_dollars", align = "cm"}, nodes={
+              {n=G.UIT.O, config={id = "fn_pre_dollars_l", func = "fn_pre_dollars_UI_set", object = DynaText({string = {{ref_table = FN.PRE.text.dollars, ref_value = "l"}}, colours = {colour}, shadow = true, float = true, scale = text_scale})}},
+              {n=G.UIT.O, config={id = "fn_pre_dollars_r", func = "fn_pre_dollars_UI_set", object = DynaText({string = {{ref_table = FN.PRE.text.dollars, ref_value = "r"}}, colours = {colour}, shadow = true, float = true, scale = text_scale})}},
    }}
-end--]]
+end
 
 --
 -- SETTINGS:

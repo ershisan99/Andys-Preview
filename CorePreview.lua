@@ -46,7 +46,9 @@ end
 -- so no simulation work happens on selection, reordering, discards, etc.
 function FN.PRE.add_update_event(trigger)
    function sim_func()
-      FN.PRE.data = FN.PRE.simulate()
+      -- NOTE: Must always return true, otherwise the event would be retried forever
+      local ok, data = FN.safe_call("preview update", FN.PRE.simulate)
+      FN.PRE.data = ok and data or nil
       return true
    end
    if FN.PRE.enabled() then
@@ -87,7 +89,7 @@ end
 local orig_update = CardArea.update
 function CardArea:update(dt)
    orig_update(self, dt)
-   FN.PRE.update_on_card_order_change(self)
+   FN.safe_call("card order check", FN.PRE.update_on_card_order_change, self)
 end
 
 function FN.PRE.update_on_card_order_change(cardarea)
@@ -153,7 +155,7 @@ end
 local orig_eval = G.FUNCS.evaluate_play
 function G.FUNCS.evaluate_play(e)
    orig_eval(e)
-   FN.PRE.add_reset_event("after")
+   FN.safe_call("preview reset", FN.PRE.add_reset_event, "after")
 end
 
 -- Disabled: queueing a reset event on every discard caused noticeable lag.
@@ -171,7 +173,16 @@ end
 --
 
 -- Add animation to preview text:
+-- NOTE: These run every frame, so they are shielded by FN.safe_call(..)
 function G.FUNCS.fn_pre_score_UI_set(e)
+   FN.safe_call("score preview text", FN.PRE.score_UI_set, e)
+end
+
+function G.FUNCS.fn_pre_dollars_UI_set(e)
+   FN.safe_call("money preview text", FN.PRE.dollars_UI_set, e)
+end
+
+function FN.PRE.score_UI_set(e)
    local new_preview_text = ""
    local should_juice = false
    if FN.PRE.lock_updates then 
@@ -246,37 +257,46 @@ function G.FUNCS.fn_pre_score_UI_set(e)
    end
 end
 
-function G.FUNCS.fn_pre_dollars_UI_set(e)
+-- Money preview text; laid out like the score preview ('X' or 'X - Y'), coloured by gain/loss:
+function FN.PRE.dollars_UI_set(e)
+   local is_left = (e.config.id == "fn_pre_dollars_l")
    local new_preview_text = ""
-   local new_colour = nil
-   if FN.PRE.data then
-      if true and (FN.PRE.data.dollars.min ~= FN.PRE.data.dollars.max) then
-         if e.config.id == "fn_pre_dollars_top" then
-            new_preview_text = " " .. FN.PRE.get_sign_str(FN.PRE.data.dollars.max) .. FN.PRE.data.dollars.max
-            new_colour = FN.PRE.get_dollar_colour(FN.PRE.data.dollars.max)
-         elseif e.config.id == "fn_pre_dollars_bot" then
-            new_preview_text = " " .. FN.PRE.get_sign_str(FN.PRE.data.dollars.min) .. FN.PRE.data.dollars.min
-            new_colour = FN.PRE.get_dollar_colour(FN.PRE.data.dollars.min)
+   local new_colour = FN.PRE.get_dollar_colour(0)
+
+   if FN.PRE.lock_updates then
+      if is_left then new_preview_text = "  " end
+   elseif FN.PRE.data then
+      local dollars = FN.PRE.data.dollars
+      if not FN.PRE.show_preview then
+         -- Preview is stale or was not requested yet.
+         -- Left text is never empty, so that the row keeps its height and the HUD does not jump around.
+         if is_left then new_preview_text = "  " end
+      elseif dollars.min ~= dollars.max then
+         -- Format as 'X - Y' :
+         if is_left then
+            new_preview_text = FN.PRE.format_dollars(dollars.min) .. " - "
+            new_colour = FN.PRE.get_dollar_colour(dollars.min)
+         else
+            new_preview_text = FN.PRE.format_dollars(dollars.max)
+            new_colour = FN.PRE.get_dollar_colour(dollars.max)
          end
       else
-         if e.config.id == "fn_pre_dollars_top" then
-            local _data = (G.SETTINGS.FN.show_min_max) and FN.PRE.data.dollars.min or FN.PRE.data.dollars.exact
-
-            new_preview_text = " " .. FN.PRE.get_sign_str(_data) .. _data
-            new_colour = FN.PRE.get_dollar_colour(_data)
-         else
-            new_preview_text = ""
-            new_colour = FN.PRE.get_dollar_colour(0)
+         -- Format as single number:
+         if is_left then
+            new_preview_text = " " .. FN.PRE.format_dollars(dollars.min) .. " "
+            new_colour = FN.PRE.get_dollar_colour(dollars.min)
          end
       end
    else
-      new_preview_text = " +??"
-      new_colour = FN.PRE.get_dollar_colour(0)
+      -- Simulation was refused (eg. face-down cards), same as ' ?????? ' for score:
+      if is_left then new_preview_text = " " .. localize('$') .. "?? " end
    end
 
-   if (not FN.PRE.text.dollars[e.config.id:sub(-3)]) or new_preview_text ~= FN.PRE.text.dollars[e.config.id:sub(-3)] then
-      FN.PRE.text.dollars[e.config.id:sub(-3)] = new_preview_text
-      e.config.object.colours = {new_colour}
+   local key = e.config.id:sub(-1)
+   if (not FN.PRE.text.dollars[key]) or new_preview_text ~= FN.PRE.text.dollars[key] then
+      FN.PRE.text.dollars[key] = new_preview_text
+      -- NOTE: The renderer crashes on an empty colour list, so only ever hand it a real colour:
+      if type(new_colour) == "table" then e.config.object.colours = {new_colour} end
       e.config.object:update_text()
       if not G.TAROT_INTERRUPT_PULSE then e.config.object:pulse(0.25) end
    end
