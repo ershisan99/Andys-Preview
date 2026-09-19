@@ -18,11 +18,12 @@ This is a fork of [Fantoms Preview](https://github.com/Fantom-Balatro/Fantoms-Pr
 
 ## Releasing
 
-Bump `version` in `FantomsPreview.json`, commit, then push a matching tag:
+Run the release script from the repo root on a clean, up to date `main`:
 
 ```
-git tag v2.6.0
-git push origin v2.6.0
+bash release.sh patch
 ```
 
-The release workflow builds the zip and publishes the release.
+Use `minor`, `major`, or an explicit version like `3.0.0` instead of `patch`. Add `--dry-run` to see the new version without changing anything.
+
+The script bumps `version` in `FantomsPreview.json`, commits, tags, and pushes. The release workflow then builds the zip and publishes the release.
