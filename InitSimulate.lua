@@ -12,7 +12,7 @@ function FN.safe_call(label, func, ...)
    local ok, result = pcall(func, ...)
    if ok then return true, result end
 
-   local message = "[FantomsPreview] Error in " .. tostring(label) .. ": " .. tostring(result)
+   local message = "[AndysPreview] Error in " .. tostring(label) .. ": " .. tostring(result)
    if not FN.logged_errors[message] and FN.logged_errors.count < 25 then
       FN.logged_errors[message] = true
       FN.logged_errors.count = FN.logged_errors.count + 1

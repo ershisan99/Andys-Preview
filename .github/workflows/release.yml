@@ -1,0 +1,38 @@
+name: Release
+
+# Push a tag like v2.6.0 to build Andys-Preview.zip and publish a GitHub release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches mod version
+        run: |
+          version=$(jq -r .version FantomsPreview.json)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match FantomsPreview.json version $version"
+            exit 1
+          fi
+
+      - name: Build zip
+        run: |
+          mkdir -p dist/Andys-Preview
+          git archive HEAD | tar -x -C dist/Andys-Preview
+          rm -rf dist/Andys-Preview/.github
+          cd dist && zip -r Andys-Preview.zip Andys-Preview
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/Andys-Preview.zip \
+            --title "$GITHUB_REF_NAME" --generate-notes --latest
