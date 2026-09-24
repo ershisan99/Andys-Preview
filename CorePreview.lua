@@ -41,7 +41,7 @@ end
 -- SIMULATION UPDATE ADVICE:
 --
 
--- The simulation only runs when the "Calculate Score" button is clicked.
+-- The simulation only runs when "s" is pressed.
 -- Game-state hooks below merely mark the current preview as stale (hide it),
 -- so no simulation work happens on selection, reordering, discards, etc.
 function FN.PRE.add_update_event(trigger)

@@ -18,9 +18,9 @@ The original had its money preview disabled in the code. This fork brings it bac
 
 ### Faster, on-demand simulation
 
-- The simulation runs only when you click Calculate Score or press `s`.
+- The simulation runs only when you press `s`. The Calculate Score button is gone, which keeps the HUD shorter.
 - The original re-ran the full simulation on every card selection, reorder, consumable use, and joker sale. Those actions now only hide the outdated preview.
-- The 5 second wait after clicking Calculate Score is gone. The result shows immediately.
+- The 5 second wait after asking for a preview is gone. The result shows immediately.
 - A per-discard reset that caused noticeable lag is removed.
 
 ### Simulation fixes
@@ -32,7 +32,7 @@ The original had its money preview disabled in the code. This fork brings it bac
 
 ### Crash safety
 
-- Every entry point runs through an error guard: the simulation, preview texts, HUD setup, the button, the keybind, and the per-frame hooks.
+- Every entry point runs through an error guard: the simulation, preview texts, HUD setup, the keybind, and the per-frame hooks.
 - An error is logged once with an `[AndysPreview]` prefix instead of crashing the game.
 - A failed simulation restores the game state and shows an unknown preview.
 - If the HUD setup fails, you get the regular game HUD without the preview.
